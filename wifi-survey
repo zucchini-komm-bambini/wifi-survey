@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Entwickler-Starter: nutzt das Modul aus diesem Ordner statt der installierten Version."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from wifisurvey.cli import main  # noqa: E402
+
+main()

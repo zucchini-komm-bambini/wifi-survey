@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=WLAN-Vermessung
+GenericName=WiFi Survey
+Comment=WLAN an Messpunkten vermessen und Netzwerk-Setups vergleichen
+Exec=omarchy-launch-or-focus-tui wifi-survey
+TryExec=wifi-survey
+Icon=network-wireless
+Terminal=false
+Categories=Network;Monitor;Utility;
+Keywords=wifi;wlan;survey;signal;dbm;repeater;mesh;
