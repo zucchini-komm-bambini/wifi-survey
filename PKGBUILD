@@ -1,13 +1,14 @@
 # Lokales Paket – bauen und installieren mit:  makepkg -si
 pkgname=wifi-survey
-pkgver=0.4.0
+pkgver=0.6.0
 pkgrel=1
 pkgdesc="WLAN an Messpunkten vermessen und Netzwerk-Setups vergleichen (TUI + CLI)"
 arch=('any')
 license=('MIT')
 depends=('python' 'python-textual' 'iw' 'iputils' 'iproute2' 'networkmanager')
 optdepends=('iperf3: Durchsatztest gegen einen iperf3-Server'
-            'gum: hübschere Auswahlmenüs im CLI-Modus')
+            'gum: hübschere Auswahlmenüs im CLI-Modus'
+            'espeak-ng: Sprachansagen beim Countdown')
 
 package() {
   cd "$startdir"

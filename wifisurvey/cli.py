@@ -5,9 +5,15 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 
 from . import __version__
+from . import anzeige
+from . import ansage
 from . import core as c
+from . import dauertest
+from . import empfehlung
+from . import umfeld
 
 FARBEN = {"gut": "32", "mittel": "33", "schlecht": "31", "best": "1;32", "worst": "31", "": ""}
 
@@ -98,12 +104,23 @@ def cmd_messen(args):
         else:
             print(f"\r   {sek:3}s  ⚠ keine Verbindung{' ' * 40}", end="", flush=True)
 
+    def status(t):
+        if t.startswith("Start in"):  # Countdown in einer Zeile herunterzählen
+            print(f"\r   {t}   ", end="", flush=True)
+        else:
+            print(f"\n   {t}", end="", flush=True)
+
+    countdown = args.countdown if args.countdown is not None else int(cfg["countdown"])
+    if countdown:
+        h = ansage.hinweis()
+        if h:
+            print(farbe(f"   ⚠ {h}", "mittel"))
     try:
         r, samples, aps = c.messung(
             szenario, ort, notiz, dauer, iface=args.interface, ping_ziel=args.ping or cfg["ping_ziel"] or None,
             iperf_host=args.iperf or cfg["iperf_host"] or None, mit_scan=not args.kein_scan and cfg["scan"],
-            mit_udp=not args.kein_udp and cfg["udp"],
-            on_sample=sample, on_status=lambda t: print(f"\n   {t}", end="", flush=True))
+            mit_udp=not args.kein_udp and cfg["udp"], countdown=countdown,
+            on_sample=sample, on_status=status)
     except c.Abgebrochen:
         sys.exit("\nAbgebrochen – nichts gespeichert.")
     except KeyboardInterrupt:
@@ -142,6 +159,10 @@ def zeige_messung(r, aps):
                   f"Verlust {farbe(f(r.get(f'udp_{richtung}_verlust_pct'), ' %'), c.stufe_udp_loss(v))}")
     if r.get("iperf_fehler"):
         print(farbe(f"  ⚠ Durchsatztest fehlgeschlagen: {r['iperf_fehler']}", "schlecht"))
+    for label, text, stufe in anzeige.messung_zeilen(r):
+        print(f"  {label:<11} {farbe(text, stufe)}")
+    if r.get("netze"):
+        print(f"  Umgebung    {len(r['netze'])} sichtbare Netze gespeichert (netze.csv)")
     if aps:
         print("  Sichtbare APs:")
         for a in aps:
@@ -165,7 +186,7 @@ def cmd_report(args):
     mit_sz = sz is None
     kopf = (f"{'Szenario':<18} " if mit_sz else "") + f"{'Ort':<18} {'Zeit':<12} {'AP':<18} {'Band':<4} " \
            f"{'dBm':>6} {'min':>5} {'TX':>6} {'RX':>6} {'Loss%':>6} {'RTT':>6} {'Jit':>5} {'Retr%':>6} " \
-           f"{'RetL%':>6} {'↓iperf':>7} {'↑iperf':>7} {'Vid↑ms/%':>9}  Hinweis"
+           f"{'RetL%':>6} {'↓iperf':>7} {'↑iperf':>7} {'Vid↑ms/%':>9} Video  Hinweis"
     print(kopf)
     print("─" * len(kopf))
 
@@ -181,7 +202,8 @@ def cmd_report(args):
               f"{col(r.get('last_retry_pct'))} "
               f"{col(r.get('iperf_down_mbit'), 7)} {col(r.get('iperf_up_mbit'), 7)} "
               f"{col(r.get('udp_up_jitter_ms') and str(r['udp_up_jitter_ms']) + '/' + str(r.get('udp_up_verlust_pct', '')), 9)}"
-              f"  {r['hinweis']}")
+              f" {farbe(empfehlung.SYMBOL[r['video']['stufe']] + ' ' + (r['video']['stufe'] or '?'), c.stufe_ampel(r['video']['stufe'])):<14}"
+              f" {r['hinweis']}")
     print(f"\nDaten: {c.DATA}")
 
 
@@ -192,16 +214,17 @@ def cmd_vergleich(args):
     szen = d["szenarien"]
     w = max(10, *(min(len(s), 20) for s in szen))
     print(f"{d['titel']} ({d['einheit']}) – {'höher' if d['hoch_gut'] else 'niedriger'} ist besser; "
-          f"Unterschiede < {d['toleranz']:g} {d['einheit']} gelten als gleich; (n) = Anzahl Messungen\n")
+          f"Unterschiede < {d['toleranz']:g} {d['einheit']} gelten als gleich; (n) = Anzahl Messungen (Median, "
+          f"±halbe Spanne); gelb = Spannen überlappen, Unterschied nicht belastbar\n")
     print(f"{'Ort':<18}" + "".join(f" {s[:20]:>{w}}" for s in szen))
     trenn = "─" * (18 + (w + 1) * len(szen))
     print(trenn)
 
     def zeile(z):
         zellen = []
-        for v, n, m in zip(z["werte"], z["n"], z["mark"]):
-            t = "–" if v is None else f"{v:g}" + (f" ({n})" if n > 1 else "")
-            zellen.append(" " + farbe(f"{t:>{w}}", m))
+        for v, n, m, sp in zip(z["werte"], z["n"], z["mark"], z["spanne"]):
+            t = "–" if v is None else f"{v:g}" + (f" ±{(sp[1] - sp[0]) / 2:.2g}" if sp else "") + (f" ({n})" if n > 1 else "")
+            zellen.append(" " + farbe(f"{t:>{w}}", "mittel" if m == "unsicher" else m))
         print(f"{z['ort'][:18]:<18}" + "".join(zellen))
     for z in d["zeilen"]:
         zeile(z)
@@ -218,6 +241,134 @@ def cmd_vergleich(args):
         print()
         for s, b in besch:
             print(f"  {s}: {b}")
+
+
+def cmd_empfehlung(args):
+    d = empfehlung.empfehlung_daten()
+    if not d["szenarien"]:
+        sys.exit("Noch keine Messungen.")
+    szen = d["szenarien"]
+    w = max(10, *(min(len(s), 22) for s in szen))
+    print("Videocall-Eignung: ● gut  ◐ geht  ○ schlecht  – nicht gemessen  "
+          "(~ Messungen widersprechen sich, D = mit Dauertest; es zählt das schlechteste Ergebnis)\n")
+    print(f"{'Ort':<26}" + "".join(f" {s[:22]:>{w}}" for s in szen))
+    print("─" * (26 + (w + 1) * len(szen)))
+    for o in d["orte"]:
+        zellen = []
+        for s in szen:
+            z = d["zellen"].get((o, s))
+            if not z:
+                zellen.append(" " + f"{'–':>{w}}")
+                continue
+            t = (empfehlung.SYMBOL[z["stufe"]] + " " + z["stufe"] + ("~" if z["schwankt"] else "")
+                 + (" D" if z["dauertest"] else ""))
+            zellen.append(" " + farbe(f"{t:>{w}}", c.stufe_ampel(z["stufe"])))
+        print(f"{o[:26]:<26}" + "".join(zellen))
+    print()
+    for i, s in enumerate(d["rangfolge"], 1):
+        st = d["pro_sz"][s]
+        print(f"  {i}. {s}: {st['gut']} gut · {st['geht']} geht · {st['schlecht']} schlecht"
+              f" · {len(st['fehlend'])} fehlen")
+    print()
+    for satz in d["fazit"]:
+        print("  " + satz)
+    if args.details:
+        print("\nGründe (schlechteste Messung je Zelle):")
+        for (o, s), z in d["zellen"].items():
+            if z["gruende"]:
+                print(f"  {o} · {s}: {'; '.join(z['gruende'])}")
+
+
+def cmd_kanaele(args):
+    emp = umfeld.kanalempfehlung(args.tage)
+    if not any(emp.values()) or not c.NETZE.exists():
+        sys.exit("Noch keine Netze gespeichert – Messungen mit AP-Scan machen.")
+    print(f"Belegung je Kanal aus allen gespeicherten Scans (stärkster Wert je Netz, ab {umfeld.SCHWELLE_DBM} dBm).")
+    print("Last = Summe der fremden Signale – je niedriger, desto ruhiger. Ruhigster Kanal zuerst.\n")
+    for b, zeilen in emp.items():
+        print(f"{b} GHz")
+        for i, z in enumerate(zeilen):
+            st = f"{z['staerkstes'][0]} {z['staerkstes'][1]:g} dBm" if z["staerkstes"] else "–"
+            last = f"{z['last_db']:g} dBm" if z["last_db"] is not None else "frei"
+            print(f"  {'→' if i == 0 else ' '} Kanal {z['kanal']:>3} ({z['breite']} MHz){' DFS' if z['dfs'] else '    '}"
+                  f"  fremd: {z['fremde']:>2}  Last: {last:>10}  stärkstes: {st}"
+                  + (f"  · eigene: {', '.join(z['eigene'])}" if z["eigene"] else ""))
+        print()
+    print("DFS-Kanäle (52–144) müssen bei Radar kurz abschalten und wechseln – für Calls lieber ein")
+    print("ruhiger Nicht-DFS-Kanal, wenn der Unterschied klein ist.")
+    wechsel = umfeld.kanalwechsel()
+    if wechsel:
+        print("\nKanalwechsel deiner APs zwischen Messungen:")
+        for w in wechsel:
+            print(f"  {w['bei'][:16].replace('T', ' ')}  {w['ap']} {w['band']} GHz: Kanal {w['von']} → {w['nach']}")
+
+
+def cmd_dauertest(args):
+    cfg = c.lade_config()
+    szenario = args.szenario or c.aktives_szenario() or szenario_auswaehlen()
+    if not szenario:
+        sys.exit("Kein Szenario gewählt – erst 'wifi-survey szenario' ausführen.")
+    ort = args.ort or ort_auswaehlen(szenario)
+    if not ort:
+        sys.exit("Abgebrochen.")
+    minuten = args.minuten or float(cfg["dauertest_min"])
+    countdown = args.countdown if args.countdown is not None else int(cfg["countdown"])
+    if countdown and ansage.hinweis():
+        print(farbe(f"   ⚠ {ansage.hinweis()}", "mittel"))
+    print(f"\n⏱ Dauertest {minuten:g} min · {szenario} · {ort}  (Strg+C beendet vorzeitig und wertet aus)\n")
+    stop, erg = threading.Event(), {}
+
+    def sekunde(sek, z):
+        print(f"\r   {sek // 60:3}:{sek % 60:02d}  {f(z.get('signal'), ' dBm'):>9}  "
+              f"Aussetzer {z['aussetzer']}  gestört {z['gestoerte_s']} s  {z.get('ap') or ''}{' ' * 10}",
+              end="", flush=True)
+
+    def status(t):
+        print(f"\r   {t}   " if t.startswith("Start in") else f"\n   {t}", end="", flush=True)
+
+    def lauf():
+        try:
+            erg["r"] = dauertest.dauertest(
+                szenario, ort, int(minuten * 60), notiz=args.notiz or "", iface=args.interface,
+                ping_ziel=args.ping or cfg["ping_ziel"] or None, iperf_host=args.iperf or cfg["iperf_host"] or None,
+                countdown=countdown, on_sekunde=sekunde, on_status=status, stop=stop)
+        except Exception as e:  # noqa: BLE001
+            erg["fehler"] = e
+    t = threading.Thread(target=lauf)
+    t.start()
+    try:
+        while t.is_alive():
+            t.join(0.2)
+    except KeyboardInterrupt:
+        stop.set()
+        print("\n   Beende vorzeitig …")
+        t.join()
+    if isinstance(erg.get("fehler"), c.Abgebrochen):
+        sys.exit("\nAbgebrochen (unter 60 s) – nichts gespeichert.")
+    if erg.get("fehler"):
+        sys.exit(farbe(f"\n✗ {erg['fehler']}", "schlecht"))
+    r, sekunden = erg["r"]
+    dauertest.speichern(r, sekunden)
+    print(f"\n\n── Dauertest: {r['ort']}  [{r['szenario']}] ─────────────────────────────")
+    for label, text, stufe in anzeige.dauertest_zeilen(r):
+        print(f"  {label:<11} {farbe(text, stufe)}")
+    print()
+
+
+def cmd_dauertests(args):
+    tests = dauertest.laden(args.szenario)
+    if not tests:
+        sys.exit("Noch keine Dauertests.")
+    print(f"{'Zeit':<12} {'Szenario':<22} {'Ort':<24} {'Dauer':>6} {'Ausse.':>6} {'längst':>6} "
+          f"{'↑Verl%':>6} {'↓Verl%':>6} {'RTT99':>6}  Urteil")
+    for r in tests:
+        u = dauertest.urteil(r)
+        dauer = int(c.num(r["dauer_s"]) or 0)
+        print(f"{r['zeit'][5:16].replace('T', ' '):<12} {r['szenario'][:22]:<22} {r['ort'][:24]:<24} "
+              f"{dauer // 60:>3}:{dauer % 60:02d} {r['aussetzer']:>6} {r['laengster_aussetzer_s']:>5}s "
+              f"{f(r.get('udp_up_verlust_pct')):>6} {f(r.get('udp_down_verlust_pct')):>6} {f(r.get('rtt_p99')):>6}  "
+              + farbe(empfehlung.SYMBOL[u['stufe']] + " " + u["stufe"] + (" – " + "; ".join(u["gruende"]) if u["gruende"] else ""),
+                      c.stufe_ampel(u["stufe"])))
 
 
 def cmd_szenario(args):
@@ -270,6 +421,8 @@ def main(argv=None):
     m.add_argument("--ping", metavar="HOST", help="Ping-Ziel (Standard: Gateway)")
     m.add_argument("-i", "--interface", help="WLAN-Interface")
     m.add_argument("--kein-scan", action="store_true", help="AP-Scan überspringen")
+    m.add_argument("-c", "--countdown", type=int, metavar="SEK",
+                   help="Vorlauf in Sekunden mit Signaltönen und Sprachansagen (0 = aus, Standard: aus config.json)")
     m.add_argument("--kein-udp", action="store_true",
                    help=f"Video-Test (UDP {c.UDP_MBIT} Mbit/s je Richtung über iperf3) überspringen")
     r = sub.add_parser("report", help="Übersicht der Messungen")
@@ -282,6 +435,21 @@ def main(argv=None):
     v = sub.add_parser("vergleich", help="Orte × Szenarien vergleichen")
     v.add_argument("-w", "--wert", choices=list(c.METRIKEN), default="signal", help="Kennzahl (Standard: signal)")
     v.add_argument("szenarien", nargs="*", help="nur diese Szenarien (Standard: alle)")
+    e = sub.add_parser("empfehlung", help="Videocall-Eignung: Orte × Szenarien, bestes Setup, Lücken")
+    e.add_argument("--details", action="store_true", help="Gründe je Zelle anzeigen")
+    k = sub.add_parser("kanaele", help="Kanalbelegung, ruhigste Kanäle und Kanalwechsel deiner APs")
+    k.add_argument("--tage", type=int, help="nur Scans der letzten N Tage")
+    dt = sub.add_parser("dauertest", help="minutenlanger Test an einem Platz (Aussetzer finden)")
+    dt.add_argument("-m", "--minuten", type=float, help="Dauer in Minuten (Standard: config.json, sonst 15)")
+    dt.add_argument("-o", "--ort", help="Ort direkt angeben statt auswählen")
+    dt.add_argument("-n", "--notiz", help="Notiz")
+    dt.add_argument("-s", "--szenario", help="Szenario (Standard: aktives)")
+    dt.add_argument("--iperf", metavar="HOST", help="iperf3-Server (ohne: nur Ping)")
+    dt.add_argument("--ping", metavar="HOST", help="Ping-Ziel (Standard: Gateway)")
+    dt.add_argument("-i", "--interface", help="WLAN-Interface")
+    dt.add_argument("-c", "--countdown", type=int, metavar="SEK", help="Vorlauf mit Ansagen (0 = aus)")
+    dl = sub.add_parser("dauertests", help="bisherige Dauertests auflisten")
+    dl.add_argument("-s", "--szenario", help="nur dieses Szenario")
     sub.add_parser("szenarien", help="Szenarien im Editor bearbeiten")
     sub.add_parser("orte", help="Ortsliste im Editor bearbeiten")
     sub.add_parser("aps", help="AP-Namen im Editor bearbeiten")
@@ -301,6 +469,14 @@ def main(argv=None):
         cmd_vergleich(args)
     elif args.cmd == "szenario":
         cmd_szenario(args)
+    elif args.cmd == "empfehlung":
+        cmd_empfehlung(args)
+    elif args.cmd == "kanaele":
+        cmd_kanaele(args)
+    elif args.cmd == "dauertest":
+        cmd_dauertest(args)
+    elif args.cmd == "dauertests":
+        cmd_dauertests(args)
     elif args.cmd == "szenarien":
         bearbeiten(c.SZENARIEN, lambda: c.SZENARIEN.write_text("# Name = Beschreibung des Setups\n"))
     elif args.cmd == "orte":

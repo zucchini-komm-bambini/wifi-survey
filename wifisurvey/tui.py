@@ -17,7 +17,12 @@ from textual.widgets import (Button, Checkbox, DataTable, Footer, Input, Label, 
 from textual.widgets.option_list import Option
 
 from . import __version__
+from . import ansage
+from . import anzeige
 from . import core as c
+from . import dauertest
+from . import empfehlung
+from . import umfeld
 
 THEME_DATEI = Path.home() / ".local/state/omarchy/current/theme/colors.toml"
 ALLE = "__alle__"
@@ -89,6 +94,15 @@ def video_zelle(r, richtung):
     return styl(f"{zahl(r.get(f'udp_{richtung}_jitter_ms'))}/{zahl(r.get(f'udp_{richtung}_verlust_pct'))}", st)
 
 
+def zeilen_text(titel, zeilen):
+    t = Text()
+    t.append(titel + "\n", style="bold")
+    for label, text, stufe in zeilen:
+        t.append(f"{label:<12} ")
+        t.append(text + "\n", style=FARBE.get(stufe, ""))
+    return t
+
+
 def ergebnis_text(r, aps):
     """Rich-Text mit der Zusammenfassung einer Messung."""
     s = c.num(r.get("signal_avg"))
@@ -130,6 +144,11 @@ def ergebnis_text(r, aps):
         t.append(zahl(r.get(f"udp_{richtung}_verlust_pct"), " %"), style=FARBE[c.stufe_udp_loss(v)])
     if r.get("iperf_fehler"):
         t.append(f"\n⚠ Durchsatztest fehlgeschlagen: {r['iperf_fehler']}", style=FARBE["schlecht"])
+    for label, text, stufe in anzeige.messung_zeilen(r):
+        t.append(f"\n{label:<11} ")
+        t.append(text, style="bold " + FARBE.get(stufe, "") if label == "Videocall" else FARBE.get(stufe, ""))
+    if r.get("netze"):
+        t.append(f"\nUmgebung    {len(r['netze'])} sichtbare Netze gespeichert (netze.csv)", style="dim")
     if r.get("notiz"):
         t.append(f"\nNotiz       {r['notiz']}", style="italic")
     w = c.klebe_warnung(aps)
@@ -218,7 +237,12 @@ class WifiSurvey(App):
     .hinweis { color: $text-muted; }
     #optionen { height: auto; }
     #optionen Input { width: 1fr; }
-    #dauer { max-width: 12; }
+    #dauer, #countdown { max-width: 17; }
+    #dauer_min { width: 20; margin-right: 1; }
+    #optionen Input, #dauer_min { border-title-color: $primary; border-title-style: bold; }
+    #empf_box, #funk_box { height: 1fr; }
+    #empf, #dauer_tab { height: auto; }
+    #empf_info, #funk { height: auto; margin: 1 0; }
     #iperf_test { min-width: 8; width: 8; margin-right: 1; }
     #steuerung { height: auto; margin: 1 0 0 0; }
     #steuerung Button { margin-right: 1; }
@@ -256,6 +280,8 @@ class WifiSurvey(App):
         Binding("3", "tab('vergleich_tab')", "Vergleich", show=False),
         Binding("4", "tab('szenarien')", "Szenarien", show=False),
         Binding("5", "tab('orte_aps')", "Orte & APs", show=False),
+        Binding("6", "tab('empfehlung')", "Empfehlung", show=False),
+        Binding("7", "tab('funkumfeld')", "Funkumfeld", show=False),
         Binding("delete", "loeschen", "Löschen"),
         Binding("ctrl+r", "neu_laden", "Neu laden"),
         Binding("ctrl+q", "quit", "Beenden"),
@@ -268,6 +294,7 @@ class WifiSurvey(App):
         self.verlauf = deque(maxlen=400)
         self.stop = threading.Event()
         self.misst = False
+        self.modus = "messung"
         self._orte = []
         self._theme_mtime = None
         self._letzte_aps = []
@@ -281,11 +308,14 @@ class WifiSurvey(App):
                     with Vertical(id="links"):
                         yield Label("", id="sz_label", classes="titel")
                         yield OptionList(id="orte")
-                        yield Label("Enter/F5 startet die Messung", classes="hinweis")
+                        yield Label("Ort wählen, dann ▶ oder F5", classes="hinweis")
                     with Vertical():
                         with Horizontal(id="optionen"):
                             yield Input(placeholder="Notiz (z.B. Tür zu)", id="notiz")
                             yield Input(str(self.cfg["dauer"]), placeholder="Sek.", type="integer", id="dauer")
+                            yield Input(str(self.cfg["countdown"] or ""), placeholder="Countdown s", type="integer",
+                                        id="countdown", tooltip="Vorlauf in Sekunden mit Signaltönen und "
+                                                                "Sprachansagen – leer oder 0 = sofort starten")
                             yield Input(self.cfg["iperf_host"], placeholder="iperf3-Server (IP, optional)", id="iperf")
                             yield Button("Test", id="iperf_test", tooltip="iperf3-Server kurz testen (3 s je Richtung)")
                             yield Checkbox("AP-Scan", self.cfg["scan"], id="scan")
@@ -294,6 +324,11 @@ class WifiSurvey(App):
                                                    f"({c.UDP_DAUER} s), misst Jitter und Verlust wie im Videocall")
                         with Horizontal(id="steuerung"):
                             yield Button("▶ Messung starten", variant="primary", id="start")
+                            yield Button("⏱ Dauertest", id="dauer_start",
+                                         tooltip="Minutenlanger Test am gewählten Ort – findet seltene Aussetzer. "
+                                                 "■ beendet vorzeitig und wertet trotzdem aus (ab 60 s).")
+                            yield Input(str(self.cfg["dauertest_min"]), placeholder="Min.", type="number",
+                                        id="dauer_min", tooltip="Dauer des Dauertests in Minuten")
                             yield Button("■ Abbrechen", variant="error", id="stop", disabled=True)
                             yield Static("", id="phase")
                         yield ProgressBar(total=100, show_eta=False, id="fortschritt")
@@ -344,9 +379,25 @@ class WifiSurvey(App):
                             yield Input(placeholder="Name für markierten AP", id="ap_name")
                             yield Button("Benennen", id="ap_benennen")
                             yield Button("Scannen", id="ap_scan")
+            with TabPane("6 Empfehlung", id="empfehlung"):
+                with VerticalScroll(id="empf_box"):
+                    yield Label("Videocall-Eignung je Ort und Setup: ● gut  ◐ geht  ○ schlecht  – nicht gemessen "
+                                "(~ Messungen widersprechen sich · D = mit Dauertest · es zählt das schlechteste)",
+                                classes="hinweis")
+                    yield DataTable(id="empf", cursor_type="cell", zebra_stripes=True)
+                    yield Static("", id="empf_info")
+                    yield Label("Dauertests (Entf = löschen)", classes="titel")
+                    yield DataTable(id="dauer_tab", cursor_type="row", zebra_stripes=True)
+            with TabPane("7 Funkumfeld", id="funkumfeld"):
+                with VerticalScroll(id="funk_box"):
+                    yield Static("", id="funk")
         yield Footer()
 
     def on_mount(self):
+        # Beschriftung im Rahmen, damit die Felder auch mit Inhalt verständlich bleiben
+        for wid, titel in (("#notiz", "Notiz"), ("#dauer", "Messdauer s"), ("#countdown", "Countdown s"),
+                           ("#iperf", "iperf3-Server"), ("#dauer_min", "Dauertest min")):
+            self.query_one(wid, Input).border_title = titel
         self.sub_title = f"v{__version__} · Daten: {c.DATA}"
         self.theme_pruefen()
         self.set_interval(3, self.theme_pruefen)
@@ -382,6 +433,8 @@ class WifiSurvey(App):
         self.lade_szenarien()
         self.lade_orte_edit()
         self.lade_aps()
+        self.lade_empfehlung()
+        self.lade_funkumfeld()
 
     def action_neu_laden(self):
         self.cfg = c.lade_config()
@@ -421,7 +474,7 @@ class WifiSurvey(App):
         spalten = (["Szenario"] if sz is None else []) + ["Ort", "Zeit", "AP", "Band", "dBm", "min", "TX", "RX",
                                                           "Loss %", "RTT", "Jitter", "Retry %", "Retry Last %",
                                                           "↓ iperf", "↑ iperf", "Video ↑ ms/%", "Video ↓ ms/%",
-                                                          "Hinweis"]
+                                                          "Videocall", "Hinweis"]
         t.add_columns(*spalten)
         for r in rows:
             zellen = ([r.get("szenario") or "–"] if sz is None else []) + [
@@ -433,7 +486,9 @@ class WifiSurvey(App):
                 styl(zahl(r.get("retry_quote_pct")), c.stufe_retry(c.num(r.get("retry_quote_pct")))),
                 styl(zahl(r.get("last_retry_pct")), c.stufe_retry(c.num(r.get("last_retry_pct")))),
                 zahl(r.get("iperf_down_mbit")), zahl(r.get("iperf_up_mbit")),
-                video_zelle(r, "up"), video_zelle(r, "down"), r["hinweis"]]
+                video_zelle(r, "up"), video_zelle(r, "down"),
+                styl(f"{empfehlung.SYMBOL[r['video']['stufe']]} {r['video']['stufe'] or '?'}",
+                     c.stufe_ampel(r["video"]["stufe"])), r["hinweis"]]
             t.add_row(*zellen, key=r["id"])
         self._report_rows = {r["id"]: r for r in rows}
 
@@ -452,9 +507,11 @@ class WifiSurvey(App):
 
         def zellen(z, fett=False):
             out = []
-            for v, n, m in zip(z["werte"], z["n"], z["mark"]):
-                s = "–" if v is None else f"{v:g}" + (f" ({n})" if n > 1 else "")
-                out.append(Text(s, style=(FARBE.get(m, "") + (" bold" if fett else "")).strip(), justify="right"))
+            for v, n, m, sp in zip(z["werte"], z["n"], z["mark"], z["spanne"]):
+                s = "–" if v is None else (f"{v:g}" + (f" ±{(sp[1] - sp[0]) / 2:.2g}" if sp else "")
+                                           + (f" ({n})" if n > 1 else ""))
+                farbe = FARBE["mittel"] if m == "unsicher" else FARBE.get(m, "")
+                out.append(Text(s, style=(farbe + (" bold" if fett else "")).strip(), justify="right"))
             return out
         for z in d["zeilen"]:
             t.add_row(z["ort"], *zellen(z))
@@ -465,7 +522,8 @@ class WifiSurvey(App):
         t.add_row(Text("Orte gewonnen", style="bold"),
                   *[Text(str(d["siege"][s]), style="bold", justify="right") for s in d["szenarien"]])
         txt = Text(f"{d['titel']} in {d['einheit']} – {'höher' if d['hoch_gut'] else 'niedriger'} ist besser. "
-                   f"Unterschiede < {d['toleranz']:g} {d['einheit']} gelten als gleich. (n) = Anzahl Messungen.\n",
+                   f"Unterschiede < {d['toleranz']:g} {d['einheit']} gelten als gleich. Bei Wiederholungen: Median "
+                   f"±halbe Spanne, (n) = Anzahl Messungen; gelb = Spannen überlappen, Sieg nicht belastbar.\n",
                    style="dim")
         if d["fehlend"]:
             txt.append("Noch nicht gemessen: ", style="bold")
@@ -557,7 +615,10 @@ class WifiSurvey(App):
     # ---------------------------------------------------------------- Messen
     @on(OptionList.OptionSelected, "#orte")
     def ort_gewaehlt(self):
-        self.action_messen()
+        # Klick/Enter wählt nur den Ort aus; gestartet wird mit dem Knopf (oder F5).
+        # Fokus auf den Knopf, damit ein zweites Enter die Messung startet.
+        if not self.misst:
+            self.query_one("#start", Button).focus()
 
     @on(Button.Pressed, "#start")
     def start_gedrueckt(self):
@@ -598,7 +659,8 @@ class WifiSurvey(App):
     def action_abbrechen(self):
         if self.misst:
             self.stop.set()
-            self.query_one("#phase", Static).update("Breche ab …")
+            self.query_one("#phase", Static).update(
+                "Beende vorzeitig und werte aus …" if self.modus == "dauertest" else "Breche ab …")
 
     def action_messen(self):
         if self.misst:
@@ -617,24 +679,34 @@ class WifiSurvey(App):
             dauer = max(5, int(self.query_one("#dauer", Input).value or 30))
         except ValueError:
             dauer = 30
+        try:
+            countdown = max(0, int(self.query_one("#countdown", Input).value or 0))
+        except ValueError:
+            countdown = 0
         iperf = self.query_one("#iperf", Input).value.strip()
         scan = self.query_one("#scan", Checkbox).value
         udp = self.query_one("#udp", Checkbox).value
-        self.cfg.update(dauer=dauer, iperf_host=iperf, scan=scan, udp=udp)
+        self.cfg.update(dauer=dauer, iperf_host=iperf, scan=scan, udp=udp, countdown=countdown)
         c.speichere_config(self.cfg)
         self.query_one(TabbedContent).active = "messen"
         self.misst = True
         self.stop.clear()
         self.query_one("#start", Button).disabled = True
+        self.query_one("#dauer_start", Button).disabled = True
         self.query_one("#stop", Button).disabled = False
+        self.modus = "messung"
         extra = ((20 + (2 * c.UDP_DAUER if udp else 0)) if iperf else 0) + (8 if scan else 0)
         self.query_one("#fortschritt", ProgressBar).update(total=dauer + extra, progress=0)
         self.query_one("#ergebnis", Static).update(Text(f"Messe „{ort}“ … Laptop ruhig halten.", style="dim"))
         self.query_one("#ap_tabelle", DataTable).clear(columns=True)
-        self.messen_worker(sz, ort, self.query_one("#notiz", Input).value.strip(), dauer, iperf, scan, udp)
+        if countdown and ansage.hinweis():
+            self.notify(ansage.hinweis(), severity="warning", timeout=10)
+        self.vorab_melden()
+        self.messen_worker(sz, ort, self.query_one("#notiz", Input).value.strip(), dauer, iperf, scan, udp,
+                           countdown)
 
     @work(thread=True, exclusive=True, group="messung")
-    def messen_worker(self, sz, ort, notiz, dauer, iperf, scan, udp):
+    def messen_worker(self, sz, ort, notiz, dauer, iperf, scan, udp, countdown):
         def sample(sek, st, ap):
             self.call_from_thread(self.mess_fortschritt, sek + 1, st, ap)
 
@@ -643,7 +715,7 @@ class WifiSurvey(App):
         try:
             r, samples, aps = c.messung(sz, ort, notiz, dauer, iface=self.iface,
                                         ping_ziel=self.cfg.get("ping_ziel") or None, iperf_host=iperf or None,
-                                        mit_scan=scan, mit_udp=udp, on_sample=sample, on_status=status, stop=self.stop)
+                                        mit_scan=scan, mit_udp=udp, countdown=countdown, on_sample=sample, on_status=status, stop=self.stop)
         except c.Abgebrochen:
             self.call_from_thread(self.mess_ende, None, None, "Abgebrochen – nichts gespeichert.")
             return
@@ -671,6 +743,7 @@ class WifiSurvey(App):
 
     def mess_ende(self, r, aps, fehler):
         self.misst = False
+        self.query_one("#dauer_start", Button).disabled = False
         self.query_one("#start", Button).disabled = False
         self.query_one("#stop", Button).disabled = True
         self.query_one("#phase", Static).update("")
@@ -696,6 +769,193 @@ class WifiSurvey(App):
             ol.highlighted = naechster  # gleich zum nächsten Ort weiter
         ol.focus()
 
+    def vorab_melden(self):
+        if not self.iface:
+            return
+        _, warn = c.vorab_check(self.iface)
+        for w in warn:
+            self.notify(w, title="Vorab-Check", severity="warning", timeout=12)
+
+    # ---------------------------------------------------------------- Dauertest
+    @on(Button.Pressed, "#dauer_start")
+    def dauertest_starten(self):
+        if self.misst:
+            return
+        sz = c.aktives_szenario()
+        if not sz:
+            self.notify("Bitte zuerst ein Szenario anlegen und aktivieren.", severity="warning")
+            self.query_one(TabbedContent).active = "szenarien"
+            return
+        ol = self.query_one("#orte", OptionList)
+        if ol.highlighted is None or not self._orte:
+            self.notify("Bitte einen Ort auswählen.", severity="warning")
+            return
+        ort = self._orte[ol.highlighted]
+        try:
+            minuten = max(1.0, float(self.query_one("#dauer_min", Input).value or 15))
+        except ValueError:
+            minuten = 15.0
+        try:
+            countdown = max(0, int(self.query_one("#countdown", Input).value or 0))
+        except ValueError:
+            countdown = 0
+        iperf = self.query_one("#iperf", Input).value.strip()
+        self.cfg.update(dauertest_min=minuten, iperf_host=iperf, countdown=countdown)
+        c.speichere_config(self.cfg)
+        if countdown and ansage.hinweis():
+            self.notify(ansage.hinweis(), severity="warning", timeout=10)
+        self.vorab_melden()
+        self.misst, self.modus = True, "dauertest"
+        self.stop.clear()
+        for knopf, aus in (("#start", True), ("#dauer_start", True), ("#stop", False)):
+            self.query_one(knopf, Button).disabled = aus
+        sekunden = int(minuten * 60)
+        self.query_one("#fortschritt", ProgressBar).update(total=sekunden, progress=0)
+        self.query_one("#ergebnis", Static).update(Text(
+            f"Dauertest „{ort}“ ({minuten:g} min) … Laptop ruhig stehen lassen. ■ beendet vorzeitig.", style="dim"))
+        self.query_one("#ap_tabelle", DataTable).clear(columns=True)
+        self.dauer_worker(sz, ort, self.query_one("#notiz", Input).value.strip(), sekunden, iperf, countdown)
+
+    @work(thread=True, exclusive=True, group="messung")
+    def dauer_worker(self, sz, ort, notiz, sekunden, iperf, countdown):
+        def sekunde(sek, z):
+            self.call_from_thread(self.dauer_fortschritt, sek, z)
+
+        def status(t):
+            self.call_from_thread(self.mess_status, t)
+        try:
+            r, sek = dauertest.dauertest(sz, ort, sekunden, notiz=notiz, iface=self.iface,
+                                         ping_ziel=self.cfg.get("ping_ziel") or None, iperf_host=iperf or None,
+                                         countdown=countdown, on_sekunde=sekunde, on_status=status, stop=self.stop)
+        except c.Abgebrochen:
+            self.call_from_thread(self.mess_ende, None, None, "Abgebrochen (unter 60 s) – nichts gespeichert.")
+            return
+        except Exception as e:  # noqa: BLE001
+            self.call_from_thread(self.mess_ende, None, None, f"Fehler: {e}")
+            return
+        dauertest.speichern(r, sek)
+        self.call_from_thread(self.dauer_ende, r)
+
+    def dauer_fortschritt(self, sek, z):
+        self.query_one("#fortschritt", ProgressBar).update(progress=sek + 1)
+        s = z.get("signal")
+        t = Text.assemble((f"{sek // 60:3}:{sek % 60:02d}  ", "dim"),
+                          (f"{s:.0f} dBm" if s is not None else "keine Verbindung",
+                           "bold " + FARBE[c.bewertung_signal(s)[1]] if s is not None else FARBE["schlecht"]),
+                          f"   Aussetzer {z['aussetzer']}   gestört {z['gestoerte_s']} s"
+                          f"   Video ↓ Verlust {zahl(z.get('udp_down_verlust_pct'), ' %')}   {z.get('ap') or ''}")
+        self.query_one("#live", Static).update(t)
+
+    def dauer_ende(self, r):
+        self.misst = False
+        for knopf, aus in (("#start", False), ("#dauer_start", False), ("#stop", True)):
+            self.query_one(knopf, Button).disabled = aus
+        self.query_one("#phase", Static).update("")
+        pb = self.query_one("#fortschritt", ProgressBar)
+        pb.update(progress=pb.total)
+        self.query_one("#ergebnis", Static).update(
+            zeilen_text(f"Dauertest: {r['ort']}  ·  {r['szenario']}", anzeige.dauertest_zeilen(r)))
+        u = dauertest.urteil(r)
+        self.notify(f"{r['ort']}: {u['stufe']}, {r['aussetzer']} Aussetzer", title="Dauertest gespeichert")
+        if r.get("iperf_fehler"):
+            self.notify(r["iperf_fehler"], title="iperf3", severity="error", timeout=10)
+        self.alles_laden()
+
+    # ---------------------------------------------------------------- Empfehlung
+    def lade_empfehlung(self):
+        d = empfehlung.empfehlung_daten()
+        t = self.query_one("#empf", DataTable)
+        t.clear(columns=True)
+        info = self.query_one("#empf_info", Static)
+        if not d["szenarien"]:
+            info.update(Text("Noch keine Messungen.", style="dim"))
+        else:
+            t.add_columns("Ort", *d["szenarien"])
+            for o in d["orte"]:
+                zellen = []
+                for s in d["szenarien"]:
+                    z = d["zellen"].get((o, s))
+                    if not z:
+                        zellen.append(Text("–", style="dim"))
+                        continue
+                    zellen.append(styl(f"{empfehlung.SYMBOL[z['stufe']]} {z['stufe']}" + ("~" if z["schwankt"] else "")
+                                       + (" D" if z["dauertest"] else ""), c.stufe_ampel(z["stufe"])))
+                t.add_row(o, *zellen)
+            txt = Text()
+            for i, s in enumerate(d["rangfolge"], 1):
+                st = d["pro_sz"][s]
+                txt.append(f"{i}. {s}", style="bold")
+                txt.append(f": {st['gut']} gut · {st['geht']} geht · {st['schlecht']} schlecht · "
+                           f"{len(st['fehlend'])} fehlen\n")
+            txt.append("\n")
+            for satz in d["fazit"]:
+                txt.append("• " + satz + "\n")
+            info.update(txt)
+        dt = self.query_one("#dauer_tab", DataTable)
+        dt.clear(columns=True)
+        dt.add_columns("Zeit", "Szenario", "Ort", "Dauer", "Aussetzer", "längster", "Verlust ↑/↓ %", "RTT 99 %",
+                       "Videocall")
+        self._dauer_rows = {}
+        for r in dauertest.laden():
+            u = dauertest.urteil(r)
+            dauer = int(c.num(r["dauer_s"]) or 0)
+            dt.add_row(r["zeit"][5:16].replace("T", " "), r["szenario"], r["ort"], f"{dauer // 60}:{dauer % 60:02d}",
+                       r["aussetzer"], f"{r['laengster_aussetzer_s']} s",
+                       f"{zahl(r.get('udp_up_verlust_pct'))} / {zahl(r.get('udp_down_verlust_pct'))}",
+                       zahl(r.get("rtt_p99")),
+                       styl(f"{empfehlung.SYMBOL[u['stufe']]} {u['stufe']}"
+                            + (" – " + "; ".join(u["gruende"]) if u["gruende"] else ""), c.stufe_ampel(u["stufe"])),
+                       key=r["id"])
+            self._dauer_rows[r["id"]] = r
+
+    def dauertest_loeschen(self):
+        t = self.query_one("#dauer_tab", DataTable)
+        if not t.row_count:
+            return
+        did = t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value
+        r = self._dauer_rows.get(did)
+
+        def weg(ok):
+            if ok:
+                dauertest.loeschen(did)
+                self.alles_laden()
+                self.notify("Dauertest gelöscht")
+        self.push_screen(Bestaetigen(f"Dauertest „{r['ort']}“ vom {r['zeit'].replace('T', ' ')} löschen?"), weg)
+
+    # ---------------------------------------------------------------- Funkumfeld
+    def lade_funkumfeld(self):
+        t = Text()
+        if not c.NETZE.exists():
+            t.append("Noch keine Netze gespeichert – bei Messungen mit AP-Scan werden alle sichtbaren Netze "
+                     "(auch die der Nachbarn) mitgespeichert.\n", style="dim")
+        else:
+            t.append(f"Belegung je Kanal aus allen gespeicherten Scans (stärkster Wert je Netz, ab "
+                     f"{umfeld.SCHWELLE_DBM} dBm). Last = Summe der fremden Signale – je niedriger, desto ruhiger.\n\n",
+                     style="dim")
+            for b, zeilen in umfeld.kanalempfehlung().items():
+                t.append(f"{b} GHz\n", style="bold")
+                for i, z in enumerate(zeilen):
+                    st = f"{z['staerkstes'][0]} {z['staerkstes'][1]:g} dBm" if z["staerkstes"] else "–"
+                    last = f"{z['last_db']:g} dBm" if z["last_db"] is not None else "frei"
+                    t.append(f" {'→' if i == 0 else ' '} Kanal {z['kanal']:>3} ({z['breite']} MHz)"
+                             f"{' DFS' if z['dfs'] else '    '}  ", style="bold" if i == 0 else "")
+                    t.append(f"fremd {z['fremde']:>2}   Last {last:>10}   stärkstes: {st}",
+                             style=FARBE["gut"] if z["last_db"] is None else "")
+                    if z["eigene"]:
+                        t.append(f"   · eigene: {', '.join(z['eigene'])}", style="dim")
+                    t.append("\n")
+                t.append("\n")
+            t.append("DFS-Kanäle (52–144) müssen bei Radar kurz abschalten und wechseln – für Calls lieber ein "
+                     "ruhiger Nicht-DFS-Kanal, wenn der Unterschied klein ist.\n\n", style="dim")
+        wechsel = umfeld.kanalwechsel()
+        t.append("Kanalwechsel deiner APs zwischen Messungen\n", style="bold")
+        if not wechsel:
+            t.append("keine\n", style="dim")
+        for w in wechsel:
+            t.append(f"  {w['bei'][:16].replace('T', ' ')}  {w['ap']} {w['band']} GHz: "
+                     f"Kanal {w['von']} → {w['nach']}\n", style=FARBE["mittel"])
+        self.query_one("#funk", Static).update(t)
+
     # ---------------------------------------------------------------- Übersicht
     @on(Select.Changed, "#rep_sz")
     @on(Checkbox.Changed, "#rep_alle")
@@ -710,6 +970,9 @@ class WifiSurvey(App):
 
     def action_loeschen(self):
         aktiv = self.query_one(TabbedContent).active
+        if aktiv == "empfehlung":
+            self.dauertest_loeschen()
+            return
         if aktiv != "uebersicht":
             return
         t = self.query_one("#report", DataTable)
