@@ -167,12 +167,31 @@ def stufe_udp_loss(v):
 # --------------------------------------------------------------------------- Videocall-Urteil
 
 STUFEN = ("schlecht", "geht", "gut")  # Index = Punkte
+# Unter diesem Signal kippen Durchsatz, Retries und Verluste (eigene Messreihen; zugleich die Schwelle,
+# ab der WLAN-Geräte einen Kanal als belegt ansehen). Der Abstand dazu ist die Reserve einer Messung.
+GRENZBEREICH_DBM = -82
+RESERVE_KAUM_DB = 2    # darunter höchstens "geht"
+RESERVE_KNAPP_DB = 6   # darunter "gut, aber knapp": so viel schwankt das Signal von Messung zu Messung
+
+
+def reserve_db(signal):
+    """Abstand des Signals zum Grenzbereich in dB (negativ = schon darunter)."""
+    return None if signal is None else round(signal - GRENZBEREICH_DBM, 1)
+
+
+def reserve_text(reserve):
+    if reserve is None:
+        return ""
+    if reserve < 0:
+        return f"{-reserve:g} dB unter dem Grenzbereich"
+    return f"Reserve {reserve:g} dB"
 
 
 def videocall_urteil(r):
     """Eignung einer Messung für Videokonferenzen.
 
-    -> {"stufe": gut|geht|schlecht|"", "punkte": 2|1|0|None, "gruende": [...], "basis": text}
+    -> {"stufe": gut|geht|schlecht|"", "punkte": 2|1|0|None, "gruende": [...], "basis": text,
+        "reserve_db": Abstand des Signals zum Grenzbereich oder None}
     Maßgeblich ist das schlechteste Einzelkriterium. Fehlen Werte, wird nur bewertet, was da ist.
     """
     befunde = []  # (punkte, grund)
@@ -194,6 +213,9 @@ def videocall_urteil(r):
             basis += f" nur {'↓' if fehlt == ['↑'] else '↑'} – {fehlt[0]} fehlgeschlagen"
         pruefe(max(udp_v, default=None), 0.5, 2, "Verlust {} %")
         pruefe(max(udp_j, default=None), 3, 10, "Jitter {} ms")
+        # Der Ping läuft 30 s, der Video-Test 10 s je Richtung: Beide sehen verschiedene Momente, beide zählen.
+        # Großzügiger als ohne Video-Test, weil ein einzelner verlorener Ping schon 0,7 % ausmacht.
+        pruefe(num(r.get("ping_verlust_pct")), 1, 5, "Ping-Verlust {} %")
     else:
         basis = "Ping"
         pruefe(num(r.get("ping_verlust_pct")), 0.01, 2, "Ping-Verlust {} %")
@@ -205,14 +227,15 @@ def videocall_urteil(r):
     if int(num(r.get("roams")) or 0):
         befunde.append((1, "AP-Wechsel während der Messung"))
     sig = num(r.get("signal_avg"))
-    if sig is not None and sig < -80:
+    reserve = reserve_db(sig)
+    if reserve is not None and reserve < RESERVE_KAUM_DB:
         befunde.append((1, f"kaum Reserve ({sig:g} dBm)"))
     if not befunde:
-        return {"stufe": "", "punkte": None, "gruende": [], "basis": basis}
+        return {"stufe": "", "punkte": None, "gruende": [], "basis": basis, "reserve_db": reserve}
     punkte = min(p for p, _ in befunde)
     if num(r.get("iperf_up_mbit")) is None:
         basis += ", ohne Durchsatztest"
-    return {"stufe": STUFEN[punkte], "punkte": punkte, "basis": basis,
+    return {"stufe": STUFEN[punkte], "punkte": punkte, "basis": basis, "reserve_db": reserve,
             "gruende": [g for p, g in sorted(befunde, key=lambda b: b[0]) if g and p < 2]}
 
 

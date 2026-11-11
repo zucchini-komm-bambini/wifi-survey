@@ -28,11 +28,19 @@ Mit einem iperf3-Server im Netz zusätzlich:
 ## Auswertung für Videokonferenzen
 
 - **Videocall-Urteil** je Messung: ● gut, ◐ geht, ○ schlecht – mit Begründung. Maßgeblich ist das
-  schlechteste Kriterium: Verlust und Jitter des Video-Tests (sonst des Pings), RTT und Ping-Spitzen,
-  Durchsatz in beide Richtungen (unter 10 Mbit/s „geht“, unter 4 „schlecht“), AP-Wechsel und Signalreserve.
+  schlechteste Kriterium: Verlust und Jitter des Video-Tests, Ping-Verlust (der Ping läuft länger als
+  der Video-Test und sieht andere Momente), RTT und Ping-Spitzen, Durchsatz in beide Richtungen
+  (unter 10 Mbit/s „geht“, unter 4 „schlecht“) und AP-Wechsel.
+- **Signalreserve**: Abstand des Signals zum Grenzbereich bei −82 dBm, ab dem Durchsatz und Verluste
+  kippen. Steht bei jedem Urteil dabei. Unter 6 dB gilt ein „gut“ als knapp (in der Matrix mit `!`
+  markiert), unter 2 dB gibt es höchstens „geht“.
 - **Empfehlung** (`wifi-survey empfehlung`, TUI-Tab 6): Orte × Szenarien als Ampel, Rangfolge der Setups,
   Orte ohne gutes Setup, bestes Setup je Ort und noch fehlende Messungen. Bei mehreren Messungen
   zählt die schlechteste.
+- **Kombinationen**: Welche zwei Setups decken zusammen mehr Orte gut ab als jedes allein (etwa
+  Router plus zusätzlicher Access Point)? Je Ort zählt das bessere der beiden, dazu steht, welcher
+  AP welchen Ort versorgt. Das ist aus Einzelmessungen gerechnet – vor einer Entscheidung beide
+  zusammen aufbauen und nachmessen.
 - **Vergleich** einzelner Kennzahlen nutzt bei Wiederholungen den Median und zeigt die Spanne; überlappen
   sich die Spannen, gilt ein Unterschied als nicht belastbar (gelb).
 
@@ -45,6 +53,14 @@ Mit einem iperf3-Server im Netz zusätzlich:
   Verbindungsabbrüche, AP- und Kanalwechsel (z. B. nach Radarerkennung auf DFS-Kanälen).
   Vorzeitig beenden (■ bzw. Strg+C) wertet die bisherige Zeit aus, sofern mindestens 60 s gelaufen sind.
   Übersicht: `wifi-survey dauertests` und TUI-Tab 6.
+  - Der Videostrom läuft in Abschnitten von 60 s. Reißt er ab, wird er neu gestartet, und die Werte
+    der Senderichtung liegen nach jedem Abschnitt vor statt erst am Schluss.
+  - Der Ping ist die Gegenprobe: Kommt vom Videostrom nichts an, während alle Pings derselben Sekunde
+    durchkommen, hängt iperf3 oder der Server und nicht das WLAN. Solche Sekunden zählen als
+    **Messfehler** und nicht als Aussetzer. Das Ergebnis nennt ihre Zahl und wie viel der Testzeit
+    der Videostrom tatsächlich gemessen hat.
+  - Früher gespeicherte Dauertests werden beim ersten Start nach diesen Regeln neu bewertet. Die
+    Messwerte bleiben, die alte Übersicht liegt danach als `dauertests.csv.bak` im Datenordner.
 
 ## Funkumfeld
 
@@ -122,6 +138,17 @@ Alles liegt als CSV und Textdateien in `~/.local/share/wifi-survey/`
 | `dauertests.csv` | Zusammenfassung je Dauertest |
 | `dauertest_sekunden.csv` | Sekundenwerte der Dauertests |
 | `config.json` | Einstellungen |
+
+## Tests
+
+```sh
+python -m unittest discover -s tests -t .
+```
+
+Die Tests brauchen weder WLAN noch einen iperf3-Server und keine zusätzlichen Pakete. Sie prüfen
+das Auslesen von `iw`, `nmcli`, `ping` und `iperf3` an aufgezeichneten Ausgaben (`tests/daten`,
+MAC-Adressen und Netznamen erfunden) sowie die Regeln für Urteil, Dauertest, Empfehlung und
+Kanalbelegung. Sie laufen in einem temporären Datenordner; `makepkg` führt sie vor dem Paketbau aus.
 
 ## Lizenz
 

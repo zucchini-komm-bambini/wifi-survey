@@ -1,0 +1,21 @@
+{
+ "end": {
+  "sum_sent": {
+   "start": 0,
+   "end": 2.000565,
+   "seconds": 2.000565,
+   "bytes": 18829803520,
+   "bits_per_second": 75297942411.2688,
+   "retransmits": 0,
+   "sender": true
+  },
+  "sum_received": {
+   "start": 0,
+   "end": 2.000595,
+   "seconds": 2.000595,
+   "bytes": 18829803520,
+   "bits_per_second": 75296813278.04977,
+   "sender": true
+  }
+ }
+}

@@ -26,6 +26,9 @@ def urteil_zeile(u):
     t = f"{empfehlung.SYMBOL[u['stufe']]} {u['stufe']}"
     if u["gruende"]:
         t += " – " + "; ".join(u["gruende"])
+    reserve = u.get("reserve_db")
+    if reserve is not None and not any("Reserve" in g for g in u["gruende"]):
+        t += " · " + c.reserve_text(reserve) + (" (knapp)" if reserve < c.RESERVE_KNAPP_DB else "")
     return t + f"  (Basis: {u['basis']})", c.stufe_ampel(u["stufe"])
 
 
@@ -77,9 +80,13 @@ def dauertest_zeilen(r):
     z.append(("Aussetzer", f"{a}" + (f", längster {r['laengster_aussetzer_s']} s, "
                                      f"{r['gestoerte_s']} s gestört insgesamt" if a else ""),
               "gut" if not a else "mittel"))
-    if r.get("udp_down_verlust_pct") not in (None, ""):
-        z.append(("Video ↑ / ↓", f"Verlust {_w(r.get('udp_up_verlust_pct'))} / {r['udp_down_verlust_pct']} %   "
+    if r.get("udp_down_verlust_pct") not in (None, "") or r.get("udp_up_verlust_pct") not in (None, ""):
+        z.append(("Video ↑ / ↓", f"Verlust {_w(r.get('udp_up_verlust_pct'))} / {_w(r.get('udp_down_verlust_pct'))} %   "
                                  f"Jitter {_w(r.get('udp_up_jitter_ms'))} / {_w(r.get('udp_down_jitter_ms'))} ms", ""))
+    mf = int(n(r.get("messfehler_s")) or 0)
+    if mf:
+        z.append(("Messfehler", f"{mf} s Videostrom ohne Daten bei intaktem Ping – liegt nicht am WLAN, "
+                                "zählt nicht als Aussetzer", "mittel"))
     z.append(("Ping", f"Verlust {_w(r.get('ping_verlust_pct'))} %   RTT Ø {_w(r.get('rtt_avg'))} ms, "
                       f"99 % unter {_w(r.get('rtt_p99'))} ms, max {_w(r.get('rtt_max'))} ms", ""))
     z.append(("Verbindung", f"{_w(r.get('ap'))} ({c.kanal_name(n(r.get('freq_mhz')))}), "
@@ -89,5 +96,5 @@ def dauertest_zeilen(r):
     if v:
         z.append(("Vorab-Check",) + v)
     if r.get("iperf_fehler"):
-        z.append(("⚠ iperf3", r["iperf_fehler"], "schlecht"))
+        z.append(("⚠ iperf3", r["iperf_fehler"], "mittel"))
     return z

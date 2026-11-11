@@ -1,0 +1,40 @@
+{
+ "end": {
+  "sum": {
+   "start": 0,
+   "end": 2.000386,
+   "seconds": 2.000386,
+   "bytes": 751200,
+   "bits_per_second": 3004286.267048335,
+   "jitter_ms": 0.02616859567335505,
+   "lost_packets": 0,
+   "packets": 626,
+   "lost_percent": 0,
+   "sender": true
+  },
+  "sum_sent": {
+   "start": 0,
+   "end": 2.000342,
+   "seconds": 2.000342,
+   "bytes": 751200,
+   "bits_per_second": 3004286.267048335,
+   "jitter_ms": 0,
+   "lost_packets": 0,
+   "packets": 626,
+   "lost_percent": 0,
+   "sender": true
+  },
+  "sum_received": {
+   "start": 0,
+   "end": 2.000386,
+   "seconds": 2.000386,
+   "bytes": 751200,
+   "bits_per_second": 3004220.185504197,
+   "jitter_ms": 0.02616859567335505,
+   "lost_packets": 0,
+   "packets": 626,
+   "lost_percent": 0,
+   "sender": false
+  }
+ }
+}

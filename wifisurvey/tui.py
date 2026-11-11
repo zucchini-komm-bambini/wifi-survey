@@ -382,7 +382,8 @@ class WifiSurvey(App):
             with TabPane("6 Empfehlung", id="empfehlung"):
                 with VerticalScroll(id="empf_box"):
                     yield Label("Videocall-Eignung je Ort und Setup: ● gut  ◐ geht  ○ schlecht  – nicht gemessen "
-                                "(~ Messungen widersprechen sich · D = mit Dauertest · es zählt das schlechteste)",
+                                "(~ Messungen widersprechen sich · ! wenig Signalreserve · D = mit Dauertest · "
+                                "es zählt das schlechteste)",
                                 classes="hinweis")
                     yield DataTable(id="empf", cursor_type="cell", zebra_stripes=True)
                     yield Static("", id="empf_info")
@@ -879,7 +880,8 @@ class WifiSurvey(App):
                         zellen.append(Text("–", style="dim"))
                         continue
                     zellen.append(styl(f"{empfehlung.SYMBOL[z['stufe']]} {z['stufe']}" + ("~" if z["schwankt"] else "")
-                                       + (" D" if z["dauertest"] else ""), c.stufe_ampel(z["stufe"])))
+                                       + ("!" if z["knapp"] else "") + (" D" if z["dauertest"] else ""),
+                                       c.stufe_ampel(z["stufe"])))
                 t.add_row(o, *zellen)
             txt = Text()
             for i, s in enumerate(d["rangfolge"], 1):
@@ -890,6 +892,15 @@ class WifiSurvey(App):
             txt.append("\n")
             for satz in d["fazit"]:
                 txt.append("• " + satz + "\n")
+            if d["kombinationen"]:
+                txt.append("\nKombinationen – je Ort zählt das bessere der beiden Setups\n", style="bold")
+                for i, k in enumerate(d["kombinationen"][:3], 1):
+                    txt.append(f"{i}. {k['setups'][0]} + {k['setups'][1]}", style="bold")
+                    txt.append(f": {k['gut']} gut · {k['geht']} geht · {k['schlecht']} schlecht · "
+                               f"{len(k['fehlend'])} fehlen\n")
+                    for zeile in empfehlung.kombination_zeilen(k):
+                        txt.append("     " + zeile + "\n")
+                txt.append(empfehlung.KOMBI_HINWEIS + "\n", style="dim")
             info.update(txt)
         dt = self.query_one("#dauer_tab", DataTable)
         dt.clear(columns=True)

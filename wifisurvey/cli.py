@@ -250,7 +250,8 @@ def cmd_empfehlung(args):
     szen = d["szenarien"]
     w = max(10, *(min(len(s), 22) for s in szen))
     print("Videocall-Eignung: ● gut  ◐ geht  ○ schlecht  – nicht gemessen  "
-          "(~ Messungen widersprechen sich, D = mit Dauertest; es zählt das schlechteste Ergebnis)\n")
+          "(~ Messungen widersprechen sich, ! wenig Signalreserve, D = mit Dauertest; "
+          "es zählt das schlechteste Ergebnis)\n")
     print(f"{'Ort':<26}" + "".join(f" {s[:22]:>{w}}" for s in szen))
     print("─" * (26 + (w + 1) * len(szen)))
     for o in d["orte"]:
@@ -261,7 +262,7 @@ def cmd_empfehlung(args):
                 zellen.append(" " + f"{'–':>{w}}")
                 continue
             t = (empfehlung.SYMBOL[z["stufe"]] + " " + z["stufe"] + ("~" if z["schwankt"] else "")
-                 + (" D" if z["dauertest"] else ""))
+                 + ("!" if z["knapp"] else "") + (" D" if z["dauertest"] else ""))
             zellen.append(" " + farbe(f"{t:>{w}}", c.stufe_ampel(z["stufe"])))
         print(f"{o[:26]:<26}" + "".join(zellen))
     print()
@@ -272,6 +273,17 @@ def cmd_empfehlung(args):
     print()
     for satz in d["fazit"]:
         print("  " + satz)
+    if d["kombinationen"]:
+        zeigen = d["kombinationen"] if args.details else d["kombinationen"][:3]
+        print("\nKombinationen – je Ort zählt das bessere der beiden Setups:")
+        for i, k in enumerate(zeigen, 1):
+            print(f"  {i}. {k['setups'][0]} + {k['setups'][1]}: {k['gut']} gut · {k['geht']} geht · "
+                  f"{k['schlecht']} schlecht · {len(k['fehlend'])} fehlen")
+            for zeile in empfehlung.kombination_zeilen(k):
+                print("       " + zeile)
+        if len(d["kombinationen"]) > len(zeigen):
+            print(f"  … {len(d['kombinationen']) - len(zeigen)} weitere mit --details")
+        print("\n  " + empfehlung.KOMBI_HINWEIS)
     if args.details:
         print("\nGründe (schlechteste Messung je Zelle):")
         for (o, s), z in d["zellen"].items():

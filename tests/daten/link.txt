@@ -1,0 +1,11 @@
+Connected to 02:00:00:00:00:01 (on wlan0)
+	SSID: Heimnetz
+	freq: 5260.0
+	RX: 4087962 bytes (9782 packets)
+	TX: 1635778 bytes (6703 packets)
+	signal: -62 dBm
+	rx bitrate: 780.0 MBit/s VHT-MCS 8 80MHz short GI VHT-NSS 2
+	tx bitrate: 650.0 MBit/s VHT-MCS 7 80MHz short GI VHT-NSS 2
+	bss flags: short-slot-time
+	dtim period: 1
+	beacon int: 100

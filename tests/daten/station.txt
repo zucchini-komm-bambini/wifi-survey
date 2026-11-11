@@ -1,0 +1,33 @@
+Station 02:00:00:00:00:01 (on wlan0)
+	authorized:	yes
+	authenticated:	yes
+	associated:	yes
+	preamble:	long
+	WMM/WME:	yes
+	MFP:		no
+	TDLS peer:	no
+	inactive time:	1 ms
+	rx bytes:	4087962
+	rx packets:	9782
+	tx bytes:	1635778
+	tx packets:	6703
+	tx retries:	2003
+	tx failed:	0
+	beacon loss:	0
+		beacon rx:	4928
+	rx drop misc:	25
+	signal:  	-62 [-64, -62] dBm
+	signal avg:	-62 dBm
+	beacon signal avg:	-61 dBm
+	tx bitrate:	650.0 MBit/s VHT-MCS 7 80MHz short GI VHT-NSS 2
+	tx duration:	0 us
+	rx bitrate:	780.0 MBit/s VHT-MCS 8 80MHz short GI VHT-NSS 2
+	rx duration:	0 us
+	DTIM period:	1
+	beacon interval:100
+	short slot time:yes
+	connected time:	519 seconds
+	associated at [boottime]:	351152.806s
+	associated at:	1794433668487 ms
+	current time:	1794434188037 ms
+

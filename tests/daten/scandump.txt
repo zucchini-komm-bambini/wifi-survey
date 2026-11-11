@@ -1,0 +1,18 @@
+BSS 02:00:00:00:00:01(on wlan0) -- associated
+	last seen: 351672.640s [boottime]
+	TSF: 1794434188037 usec (20768d, 20:36:28)
+	freq: 5260.0
+	beacon interval: 100 TUs
+	capability: ESS Privacy SpectrumMgmt ShortSlotTime RadioMeasure (0x1511)
+	signal: -60.00 dBm
+	last seen: 120 ms ago
+	Information elements from Probe Response frame:
+	SSID: Heimnetz
+	Supported rates: 6.0* 9.0 12.0* 18.0 24.0* 36.0 48.0 54.0
+BSS 12:00:00:00:00:07(on wlan0)
+	last seen: 351670.112s [boottime]
+	freq: 5180.0
+	beacon interval: 100 TUs
+	signal: -81.00 dBm
+	last seen: 2650 ms ago
+	SSID: Cafe: Gast
